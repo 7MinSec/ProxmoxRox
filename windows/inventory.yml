@@ -1,0 +1,13 @@
+# Sample inventory.yml file with your proxmox host IPs and credentials
+---
+proxmox:
+  hosts:
+    NAME-OF-YOUR-MACHINE:
+      ansible_host: your.proxmox.ip.here
+      ansible_user: root
+      ansible_password: yourpassword
+      pve_storage_id: your-machine-storage-name
+  
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_python_interpreter: auto_silent

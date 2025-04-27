@@ -1,0 +1,321 @@
+---
+- hosts: "{{ target_host }}"
+  gather_facts: false
+  vars_files:
+    - vars.yml
+  vars:
+    template_name_lower: "{{ template_name | lower }}"
+    default_bridge: "vmbr0"
+    default_network_adapter: "virtio"
+    default_iso_folder: "iso-files"
+
+  tasks:
+    - name: Load template configurations
+      set_fact:
+        template_configs: "{{ lookup('file', 'vars.yml') | from_yaml }}"
+
+    - name: Set template configuration
+      set_fact:
+        template_config: "{{ template_configs[template_name_lower] | default({}) }}"
+
+    # Verify template configuration
+    - name: Verify template configuration
+      fail:
+        msg: "No configuration found for template '{{ template_name }}'. Available templates are: {{ template_configs.keys() | select('match', '^[a-z]') | list | join(', ') }}"
+      when: template_config | length == 0
+
+    # Create temp directory
+    - name: Create temp directory
+      file:
+        path: /tmp/{{template_name}}
+        state: directory
+    
+    # Template out autounattend answer file    
+    - name: Template out autounattend answer file        
+      template:
+        src: "{{ template_config.autounattend_template }}"
+        dest: "/tmp/{{template_name}}/autounattend.xml"
+      vars:
+        deploy_image: "{{ template_config.deploy_image }}"
+        vm_admin_pass: "{{ template_config.vm_admin_pass }}"
+        vm_time_zone: "{{ template_config.vm_time_zone }}"
+        org_name: "{{ template_config.org_name }}"
+
+    # Copy drivers & scripts for ISO         
+    - name: Copy files for ISO
+      copy:
+        src: iso-files/
+        dest: /tmp/{{template_name}}/
+
+    # Set ISO folder based on template
+    - name: Set ISO folder based on template
+      set_fact:
+        iso_folder: "{{ 'iso-files-server' if template_name == 'windowsserver' else default_iso_folder }}"
+
+    # Add timestamp to ISO filename
+    - name: Set ISO timestamp
+      set_fact:
+        timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d-%H%M') }}"
+        iso_filename_timestamped: "{{ template_name }}-{{ lookup('pipe', 'date +%Y-%m-%d-%H%M') }}-provision.iso"
+
+    # Show ISO details before creation
+    - name: Display ISO creation details
+      debug:
+        msg:
+          - "Creating ISO with name: {{ iso_filename_timestamped }}"
+          - "ISO will be stored at: /var/lib/vz/template/iso/{{ iso_filename_timestamped }}"
+          - "Source files from: /tmp/{{template_name}}/"
+
+    # Create provision ISO (always create new one with timestamp)
+    - name: Create provision ISO
+      command: "genisoimage -J -r -v -o /var/lib/vz/template/iso/{{ iso_filename_timestamped }} /tmp/{{template_name}}/"
+      register: iso_created
+
+    # List Windows ISO files
+    - name: List Windows ISO files
+      shell: "ls -l /var/lib/vz/template/iso/Windows*.iso"
+      register: windows_isos
+      ignore_errors: yes
+
+    - name: Display Windows ISO files
+      debug:
+        msg: "Current Windows ISOs in directory:\n{{ windows_isos.stdout }}"
+      when: windows_isos.rc == 0
+
+    # Show ISO creation output
+    - name: Display ISO creation output
+      debug:
+        msg: "{{ iso_created.stdout_lines }}"
+      when: iso_created.stdout_lines is defined
+
+    # Check ISO creation
+    - name: Check ISO creation
+      stat:
+        path: "/var/lib/vz/template/iso/{{ iso_filename_timestamped }}"
+      register: iso_file
+
+    # Fail if ISO wasn't created
+    - name: Fail if ISO wasn't created
+      fail:
+        msg: "Provision ISO was not created successfully"
+      when: not iso_file.stat.exists
+
+    # Set correct permissions on ISO
+    - name: Set correct permissions on ISO
+      file:
+        path: "/var/lib/vz/template/iso/{{ iso_filename_timestamped }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Get next available VMID
+    - name: Get next available VMID
+      shell: "pvesh get /cluster/nextid"
+      register: next_vmid_result
+
+    - name: Set next_vmid fact
+      set_fact:
+        next_vmid: "{{ next_vmid_result.stdout }}"
+
+    # Debug variables
+    - name: Debug variables
+      debug:
+        msg:
+          - "template_name: {{ template_name }}"
+          - "template_config.template_name: {{ template_config.template_name }}"
+          - "ISO path: /var/lib/vz/template/iso/{{ iso_filename_timestamped }}"
+          - "Next VMID: {{ next_vmid }}"
+
+    # Set network adapter based on input or default
+    - name: Set network adapter
+      set_fact:
+        network_adapter: "{{ network_adapter | default(default_network_adapter) }}"
+
+    - name: Set VM-specific variables
+      set_fact:
+        vm_cores: "{{ template_config.vm_cores | default(1) }}"
+        vm_sockets: "{{ template_config.vm_sockets | default(1) }}"
+        vcpus: "{{ template_config.vcpus | default(2) }}"
+        vm_memory_mb: "{{ template_config.vm_memory_mb | default(1024) }}"
+        vm_name: "{{ template_config.vm_name | default(template_name) }}"
+        vm_os_type: "{{ template_config.vm_os_type | default('l26') }}"
+        drive_size_gb: "{{ template_config.drive_size_gb | default(32) }}"
+        agent: "{{ template_config.agent | default(1) }}"
+        os_iso_location: "{{ template_config.os_iso_location | default('') }}"
+        storage_name: "{{ storage_name | default('local-lvm') }}"
+        bridge_name: "{{ bridge | default(default_bridge) }}"
+        network_config: "{{ network_adapter | default('virtio') }},bridge={{ bridge | default(default_bridge) }}{% if vlan is defined %},tag={{ vlan }}{% endif %}{% if macaddy is defined %},macaddr={{ macaddy }}{% endif %}"
+
+    - name: Set processor type
+      set_fact:
+        processor_type: >-
+          {% if template_name_lower in ['windows11', 'windowsserver'] %}
+          host
+          {% else %}
+          {{ custom_processor_type | default(template_config.processor_type) | default('host') }}
+          {% endif %}
+
+    - name: Debug processor_type
+      debug:
+        var: processor_type
+
+    - name: Create VM command
+      set_fact:
+        vm_create_command: >-
+          qm create {{ next_vmid }}
+          --name "{{ vm_name }}"
+          --cores {{ vm_cores }}
+          --sockets {{ vm_sockets }}
+          --vcpus {{ vcpus }}
+          --memory {{ vm_memory_mb }}
+          --net0 "{{ network_config }}"
+          --scsihw virtio-scsi-pci
+          --scsi0 {{ storage_name }}:{{ drive_size_gb }},format={{ hostvars[inventory_hostname].pve_storage_format }}
+          --ostype {{ vm_os_type }}
+          --agent {{ agent }}
+          --cpu {{ processor_type }}
+
+    - name: Debug VM creation command
+      debug:
+        msg: >
+          qm create {{next_vmid}}
+          --name "{{vm_name}}"
+          --cores {{vm_cores}}
+          --sockets {{vm_sockets}}
+          --memory {{vm_memory_mb}}
+          --net0 "{{network_config}}"
+          --scsihw virtio-scsi-pci
+          --scsi0 {{storage_name}}:{{drive_size_gb}},format={{hostvars[inventory_hostname].pve_storage_format}}
+          --ostype {{vm_os_type}}
+          --agent {{agent}}
+
+    - name: Create VM
+      command: "{{ vm_create_command }}"
+      register: vm_creation
+      failed_when: false
+
+    - name: Debug VM creation output
+      debug:
+        var: vm_creation
+
+    # Check VM creation result
+    - name: Check VM creation result
+      fail:
+        msg: "VM creation failed: {{ vm_creation.stderr }}"
+      when: vm_creation.rc != 0
+
+    # Debug task to verify VM creation command
+    - name: Debug VM creation command
+      debug:
+        msg: >
+          qm create {{next_vmid}}
+          --name "{{vm_name}}"
+          --cores {{vm_cores}}
+          --sockets {{vm_sockets}}
+          --memory {{vm_memory_mb}}
+          --net0 "{{network_config}}"
+          --scsihw virtio-scsi-pci
+          --scsi0 {{storage_name}}:{{drive_size_gb}},format={{hostvars[inventory_hostname].pve_storage_format}}
+          --ostype {{vm_os_type}}
+          --agent {{agent}}
+
+    - name: Attach OS ISO
+      command: "qm set {{next_vmid}} --ide0 {{os_iso_location}},media=cdrom"
+      when: 
+        - vm_creation.rc == 0
+        - os_iso_location != ''
+
+    # Update the attach custom provision ISO command to use timestamped filename
+    - name: Attach custom provision ISO
+      command: "qm set {{next_vmid}} --ide2 local:iso/{{ iso_filename_timestamped }},media=cdrom"
+      when: vm_creation.rc == 0
+
+    - name: Set boot order
+      command: "qm set {{next_vmid}} --boot order=ide0;scsi0"
+      when: vm_creation.rc == 0
+
+    # Start VM
+    - name: Start VM
+      command: "qm start {{next_vmid}}"
+      when: vm_creation.rc == 0
+
+    # Display VM ID before waiting
+    - name: Display VM ID
+      debug:
+        msg: "Starting VM with ID: {{ next_vmid }}"
+      when: vm_creation.rc == 0
+
+    # Wait for VM to be up
+    - name: Wait for VM to be up
+      shell: "qm agent {{next_vmid}} ping"
+      register: vm_status
+      until: vm_status.rc == 0 and vm_status.stdout == ""
+      retries: 15        # 15 retries = 30 minutes total
+      delay: 120        # 120 seconds = 2 minutes between checks
+      failed_when: 
+        - vm_status.rc != 0 
+        - "'is not running' not in vm_status.stderr"
+      ignore_errors: yes
+      vars:
+        ansible_failed_task_warning: false  # Suppress the "FAILED - RETRYING" messages
+      no_log: "{{ ansible_loop_var | default(0) % 3 != 0 }}"  # Only show log every 6 minutes (3 loops of 2 minutes)
+
+    - name: Report VM status
+      debug:
+        msg: "VM {{next_vmid}} is now up and running"
+      when: vm_status.rc == 0 and vm_status.stdout == ""
+
+    - name: Wait for Windows installation to finalize
+      pause:
+        minutes: 7
+      when: vm_status.rc == 0 and vm_status.stdout == ""
+      
+    - name: Report VM failed to start
+      fail:
+        msg: "VM {{next_vmid}} failed to start within 30 minutes"
+      when: vm_status.rc != 0 or vm_status.stdout != ""
+
+    # Remove CD drives first (to ensure ISO isn't in use)
+    - name: Remove IDE CD Drives
+      command: "qm set {{next_vmid}} --delete ide2 --delete ide3"
+      when: vm_creation.rc == 0
+
+    # Remove only this deployment's Provision ISO file
+    - name: Remove Provision ISO file
+      file:
+        path: "/var/lib/vz/template/iso/{{ iso_filename_timestamped }}"
+        state: absent
+      register: iso_cleanup
+      when: vm_creation.rc == 0
+
+    - name: Debug ISO cleanup
+      debug:
+        msg: "Cleaned up ISO file: {{ iso_filename_timestamped }}"
+      when: iso_cleanup.changed
+
+    # Cleanup temp files
+    - name: Cleanup temp files used for ISO build
+      file:
+        path: /tmp/{{template_name}}
+        state: absent
+      when: iso_created is defined and iso_created.changed
+
+    # Optional: Save VM details for post-deployment
+    - name: Save VM details for post-deployment
+      blockinfile:
+        path: vars.yml
+        block: |
+          
+          # Last deployed VM details
+          last_deployed:
+            vm_id: {{ next_vmid }}
+            vm_name: {{ vm_name }}
+        marker: "# {mark} LAST DEPLOYED VM DETAILS"
+      delegate_to: localhost
+
+    - name: Done
+      debug:
+        msg: |
+          VM build {{vm_name}}, with VMID {{next_vmid}} complete.
+          VM IP can be found in Proxmox console
+          Ready for post-deployment configuration

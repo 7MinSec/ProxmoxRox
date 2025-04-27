@@ -1,0 +1,52 @@
+---
+
+# Common PVE Template Provisioning Variables
+pve_storage_id: "{{ storage | default('local-lvm') }}"
+vm_cores: 2
+vm_sockets: 1
+start_at_boot: no
+format: qcow2
+agent: enabled=1  # Enable the QEMU guest agent
+processor_type: "{{ custom_processor_type | default('host') }}"  # Changed default to host
+
+# Template-specific configurations
+windows11:
+  template_name: win11
+  vm_memory_mb: 8192
+  vm_cores: 2
+  vm_sockets: 1
+  vcpus: 2
+  vm_os_type: win11
+  drive_size_gb: 75
+  format: qcow2
+  os_iso_location: local:iso/win11rufus.iso
+  autounattend_template: ./auto11.xml
+  iso_files_source: iso-files
+  deploy_image: 'Windows 11 Pro'
+  vm_admin_pass: PUT YOUR DEFAULT PASSWORD HERE LOL!
+  vm_time_zone: 'Central Standard Time'
+  org_name: '7MinSec'
+  macaddy: "{{ custom_macaddy | default('auto') }}"
+  processor_type: "{{ custom_processor_type | default(processor_type) }}"
+
+windowsserver:
+  template_name: winserver
+  vm_cores: 2
+  vm_sockets: 1
+  vcpus: 2
+  vm_memory_mb: 4096
+  vm_name: "WindowsServer"
+  vm_os_type: "win10"
+  drive_size_gb: 75
+  format: qcow2
+  agent: 1
+  os_iso_location: local:iso/WinServer2019.iso
+  autounattend_template: ./auto19.xml
+  iso_files_source: iso-files-server
+  deploy_image: 'Windows Server 2019 SERVERSTANDARD'
+  vm_admin_pass: ServerAdmin123!
+  vm_time_zone: 'Central Standard Time'
+  org_name: '7MinSec'
+  network_adapter: e1000
+  macaddy: "{{ custom_macaddy | default('auto') }}"
+  processor_type: "{{ custom_processor_type | default(processor_type) }}"
