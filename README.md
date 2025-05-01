@@ -1,4 +1,4 @@
-# ProxmoxRox
+# ProxmoxRox - v0.7
 
 ## What is this?
 A repo of info and scripts to help you quickly build Ubuntu and Windows VMs on Proxmox.  Here's the breakdown:
