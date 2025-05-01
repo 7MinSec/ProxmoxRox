@@ -1,0 +1,254 @@
+#cloud-config
+# Required Variables:
+# -----------------
+# VM_HOSTNAME: The hostname for the VM (e.g., "pentest-vm")
+# TIMEZONE: The timezone for the VM (e.g., "America/Chicago")
+# USERNAME: The username to create (e.g., "pentester")
+# USER_PASSWORD: The password for the user
+# TAILSCALE_AUTH_KEY: Your Tailscale authentication key
+# SMTP_URL: SMTP server URL (e.g., "smtps://smtp.gmail.com:465")
+# SMTP_FROM: Sender email address
+# SMTP_TO: Recipient email address
+# SMTP_USER: SMTP username
+# SMTP_PASSWORD: SMTP password
+#
+# Usage:
+# ------
+# 1. Replace all ${VARIABLE_NAME} placeholders with your actual values
+# 2. Remove the # from the Tailscale command line if you want to use Tailscale
+# 3. Update the email configuration with your SMTP server details
+# 4. Save the file as user-data.yaml
+# 5. Use this file with your cloud-init or Proxmox configuration
+
+hostname: ${VM_HOSTNAME}
+manage_etc_hosts: true
+timezone: ${TIMEZONE}
+
+# User configuration
+users:
+  - name: ${USERNAME}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, admin
+    home: /home/${USERNAME}
+    shell: /bin/bash
+    lock_passwd: false
+
+# System configuration
+ssh_pwauth: true
+disable_root: false
+package_update: true
+package_upgrade: true
+packages:
+  - docker.io
+  - git
+  - libpcap-dev
+  - lightdm
+  - make
+  - net-tools
+  - nfs-common
+  - nmap
+  - pipx
+  - plocate
+  - python3
+  - python3-pip
+  - python3-venv
+  - qemu-guest-agent
+  - tshark
+  - ubuntu-desktop
+  - vim
+
+write_files:
+  - path: /var/log/vm-build.log
+    permissions: '0644'
+    content: |
+      VM Build Progress Log
+      --------------------
+      Started at: $(date)
+      
+  - path: /etc/motd
+    content: |
+      Welcome to ${VM_HOSTNAME}!
+      
+      Build Status: In Progress
+      Check /var/log/vm-build.log for build progress
+      
+  - path: /usr/local/bin/log_progress
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/vm-build.log
+      wall "$1"
+
+  - path: /home/${USERNAME}/tail.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      curl -fsSL https://tailscale.com/install.sh | sh
+      #sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY}
+
+  - path: /etc/systemd/system/cloud-init-progress.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Display Cloud-Init Progress
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/bin/bash -c 'clear; echo "Cloud-Init Setup in Progress..."; tail -f /var/log/vm-build.log'
+      StandardOutput=tty
+      TTYPath=/dev/tty1
+      TTYReset=yes
+      TTYVHangup=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - /usr/local/bin/log_progress "Setting up user password..."
+  - echo '${USERNAME}:${USER_PASSWORD}' | chpasswd
+  - systemctl enable cloud-init-progress.service
+  - systemctl start cloud-init-progress.service
+  - /usr/local/bin/log_progress "Starting VM build process"
+  - /usr/local/bin/log_progress "Setting up home directory permissions..."
+  - chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
+  - chmod 755 /home/${USERNAME}
+  - /usr/local/bin/log_progress "Home directory permissions set"
+  - /usr/local/bin/log_progress "Copying xfer directory..."
+  - mkdir -p /home/${USERNAME}/xfer
+  - cp -r /var/lib/vz/snippets/xfer/* /home/${USERNAME}/xfer/
+  - chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/xfer
+  - chmod -R 755 /home/${USERNAME}/xfer
+  - /usr/local/bin/log_progress "Xfer directory copied"
+  - /usr/local/bin/log_progress "Installing QEMU guest agent..."
+  - apt-get install -y qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - /usr/local/bin/log_progress "QEMU guest agent installed and started"
+  - /usr/local/bin/log_progress "Setting up user environment"
+  - su - ${USERNAME} -c 'git clone https://github.com/lkarlslund/adalanche.git /home/${USERNAME}/adalanche' && /usr/local/bin/log_progress "Cloned adalanche"
+  - su - ${USERNAME} -c 'git clone https://github.com/p0dalirius/ApacheTomcatScanner.git /home/${USERNAME}/ApacheTomcatScanner' && /usr/local/bin/log_progress "Cloned ApacheTomcatScanner"
+  - su - ${USERNAME} -c 'git clone https://github.com/leonjza/awesome-nmap-grep.git /home/${USERNAME}/awesome-nmap-grep' && /usr/local/bin/log_progress "Cloned awesome-nmap-grep"
+  - su - ${USERNAME} -c 'git clone https://github.com/bettercap/bettercap.git /home/${USERNAME}/bettercap' && /usr/local/bin/log_progress "Cloned bettercap"
+  - su - ${USERNAME} -c 'git clone https://github.com/blacklanternsecurity/bbot.git /home/${USERNAME}/bbot' && /usr/local/bin/log_progress "Cloned bbot"
+  - su - ${USERNAME} -c 'wget https://github.com/SpecterOps/bloodhound-cli/releases/download/v0.1.3/bloodhound-cli-v0.1.3-linux-amd64.tar.gz -O /home/${USERNAME}/bloodhound-cli.tar.gz' && /usr/local/bin/log_progress "Downloaded bloodhound-cli"
+  - su - ${USERNAME} -c 'git clone https://github.com/CravateRouge/bloodyAD /home/${USERNAME}/bloodyad' && /usr/local/bin/log_progress "Cloned bloodyAD"
+  - su - ${USERNAME} -c 'git clone https://github.com/zer1t0/certi.git /home/${USERNAME}/certi' && /usr/local/bin/log_progress "Cloned certi"
+  - su - ${USERNAME} -c 'git clone https://github.com/ly4k/Certipy.git /home/${USERNAME}/certipy' && /usr/local/bin/log_progress "Cloned Certipy"
+  - su - ${USERNAME} -c 'wget https://github.com/jpillora/chisel/releases/download/v1.10.0/chisel_1.10.0_linux_amd64.gz -O /home/${USERNAME}/chisel.gz' && /usr/local/bin/log_progress "Downloaded chisel"
+  - su - ${USERNAME} -c 'git clone https://github.com/p0dalirius/Coercer.git /home/${USERNAME}/Coercer' && /usr/local/bin/log_progress "Cloned Coercer"
+  - su - ${USERNAME} -c 'git clone https://github.com/knavesec/CredMaster.git /home/${USERNAME}/CredMaster' && /usr/local/bin/log_progress "Cloned CredMaster"
+  - su - ${USERNAME} -c 'git clone https://github.com/trickest/cve.git /home/${USERNAME}/cve' && /usr/local/bin/log_progress "Cloned cve"
+  - su - ${USERNAME} -c 'git clone https://github.com/ihebski/DefaultCreds-cheat-sheet.git /home/${USERNAME}/DefaultCreds-cheat-sheet' && /usr/local/bin/log_progress "Cloned DefaultCreds-cheat-sheet"
+  - su - ${USERNAME} -c 'git clone https://github.com/CCob/DGPOEdit.git /home/${USERNAME}/DGPOEdit' && /usr/local/bin/log_progress "Cloned DGPOEdit"
+  - su - ${USERNAME} -c 'git clone https://github.com/s0lst1c3/eaphammer.git /home/${USERNAME}/eaphammer' && /usr/local/bin/log_progress "Cloned eaphammer"
+  - su - ${USERNAME} -c 'git clone https://github.com/nodauf/GoMapEnum.git /home/${USERNAME}/GoMapEnum' && /usr/local/bin/log_progress "Cloned GoMapEnum"
+  - su - ${USERNAME} -c 'wget https://github.com/sensepost/go-out/releases/download/1.3/go-out-linux-amd64 -O /home/${USERNAME}/go-out' && /usr/local/bin/log_progress "Downloaded go-out"
+  - su - ${USERNAME} -c 'wget https://github.com/sensepost/gowitness/releases/download/3.0.0/gowitness-3.0.0-linux-amd64 -O /home/${USERNAME}/gowitness' && /usr/local/bin/log_progress "Downloaded gowitness"
+  - su - ${USERNAME} -c 'git clone https://github.com/ZerBea/hcxdumptool.git /home/${USERNAME}/hcxdumptool' && /usr/local/bin/log_progress "Cloned hcxdumptool"
+  - su - ${USERNAME} -c 'git clone https://github.com/ZerBea/hcxtools.git /home/${USERNAME}/hcxtools' && /usr/local/bin/log_progress "Cloned hcxtools"
+  - su - ${USERNAME} -c 'git clone https://github.com/synacktiv/GPOddity.git /home/${USERNAME}/GPOddity' && /usr/local/bin/log_progress "Cloned GPOddity"
+  - su - ${USERNAME} -c 'git clone https://github.com/fortra/impacket.git /home/${USERNAME}/impacket' && /usr/local/bin/log_progress "Cloned impacket"
+  - su - ${USERNAME} -c 'git clone https://github.com/joaomatosf/jexboss /home/${USERNAME}/jexboss' && /usr/local/bin/log_progress "Cloned jexboss"
+  - su - ${USERNAME} -c 'git clone https://github.com/cube0x0/KrbRelay.git /home/${USERNAME}/KrbRelay' && /usr/local/bin/log_progress "Cloned KrbRelay"
+  - su - ${USERNAME} -c 'git clone https://github.com/dirkjanm/krbrelayx.git /home/${USERNAME}/krbrelayx' && /usr/local/bin/log_progress "Cloned krbrelayx"
+  - su - ${USERNAME} -c 'git clone https://github.com/zyn3rgy/LdapRelayScan.git /home/${USERNAME}/LdapRelayScan' && /usr/local/bin/log_progress "Cloned LdapRelayScan"
+  - su - ${USERNAME} -c 'git clone https://github.com/Hackndo/lsassy.git /home/${USERNAME}/lsassy' && /usr/local/bin/log_progress "Cloned lsassy"
+  - su - ${USERNAME} -c 'git clone https://github.com/robertdavidgraham/masscan.git /home/${USERNAME}/masscan' && /usr/local/bin/log_progress "Cloned masscan"
+  - su - ${USERNAME} -c 'git clone https://github.com/subat0mik/Misconfiguration-Manager.git /home/${USERNAME}/Misconfiguration-Manager' && /usr/local/bin/log_progress "Cloned Misconfiguration-Manager"
+  - su - ${USERNAME} -c 'git clone https://github.com/dirkjanm/mitm6 /home/${USERNAME}/mitm6' && /usr/local/bin/log_progress "Cloned mitm6"
+  - su - ${USERNAME} -c 'git clone https://github.com/silverhack/monkey365 /home/${USERNAME}/monkey365' && /usr/local/bin/log_progress "Cloned monkey365"
+  - su - ${USERNAME} -c 'git clone https://github.com/helpsystems/nanodump.git /home/${USERNAME}/nanodump' && /usr/local/bin/log_progress "Cloned nanodump"
+  - su - ${USERNAME} -c 'git clone https://github.com/Flangvik/NetLoader.git /home/${USERNAME}/NetLoader' && /usr/local/bin/log_progress "Cloned NetLoader"
+  - su - ${USERNAME} -c 'git clone https://github.com/honze-net/nmap-bootstrap-xsl.git /home/${USERNAME}/nmap-bootstrap-xsl' && /usr/local/bin/log_progress "Cloned nmap-bootstrap-xsl"
+  - su - ${USERNAME} -c 'git clone https://github.com/NetsecExplained/Nmap-XML-to-CSV.git /home/${USERNAME}/Nmap-XML-to-CSV' && /usr/local/bin/log_progress "Cloned Nmap-XML-to-CSV"
+  - su - ${USERNAME} -c 'git clone https://github.com/nnposter/nndefaccts.git /home/${USERNAME}/nndefaccts' && /usr/local/bin/log_progress "Cloned nndefaccts"
+  - su - ${USERNAME} -c 'git clone https://github.com/evilmog/ntlmv1-multi.git /home/${USERNAME}/ntlmv1-multi' && /usr/local/bin/log_progress "Cloned ntlmv1-multi"
+  - su - ${USERNAME} -c 'wget https://github.com/Pennyw0rth/NetExec/releases/download/v1.3.0/nxc-ubuntu-latest.zip -O /home/${USERNAME}/nxc-ubuntu-latest.zip' && /usr/local/bin/log_progress "Downloaded nxc-ubuntu-latest"
+  - su - ${USERNAME} -c 'git clone https://github.com/AlmondOffSec/PassTheCert.git /home/${USERNAME}/PassTheCert' && /usr/local/bin/log_progress "Cloned PassTheCert"
+  - su - ${USERNAME} -c 'git clone https://github.com/topotam/PetitPotam.git /home/${USERNAME}/PetitPotam' && /usr/local/bin/log_progress "Cloned PetitPotam"
+  - su - ${USERNAME} -c 'git clone https://github.com/dirkjanm/PKINITtools.git /home/${USERNAME}/PKINITtools' && /usr/local/bin/log_progress "Cloned PKINITtools"
+  - su - ${USERNAME} -c 'git clone https://github.com/lgandx/PCredz /home/${USERNAME}/PCredz' && /usr/local/bin/log_progress "Cloned PCredz"
+  - su - ${USERNAME} -c 'git clone https://github.com/garrettfoster13/pre2k.git /home/${USERNAME}/pre2k' && /usr/local/bin/log_progress "Cloned pre2k"
+  - su - ${USERNAME} -c 'git clone https://github.com/dirkjanm/PrivExchange.git /home/${USERNAME}/PrivExchange' && /usr/local/bin/log_progress "Cloned PrivExchange"
+  - su - ${USERNAME} -c 'git clone https://github.com/testanull/ProxyNotShell-PoC.git /home/${USERNAME}/ProxyNotShell-PoC' && /usr/local/bin/log_progress "Cloned ProxyNotShell-PoC"
+  - su - ${USERNAME} -c 'git clone https://github.com/trustedsec/ptf /home/${USERNAME}/ptf' && /usr/local/bin/log_progress "Cloned ptf"
+  - su - ${USERNAME} -c 'git clone https://github.com/pycrypto/pycrypto.git /home/${USERNAME}/pycrypto' && /usr/local/bin/log_progress "Cloned pycrypto"
+  - su - ${USERNAME} -c 'git clone https://github.com/MWR-CyberSec/PXEThief /home/${USERNAME}/PXEThief' && /usr/local/bin/log_progress "Cloned PXEThief"
+  - su - ${USERNAME} -c 'git clone https://github.com/csandker/pxethiefy.git /home/${USERNAME}/pxethiefy' && /usr/local/bin/log_progress "Cloned pxethiefy"
+  - su - ${USERNAME} -c 'git clone https://github.com/lgandx/Responder.git /home/${USERNAME}/Responder' && /usr/local/bin/log_progress "Cloned Responder"
+  - su - ${USERNAME} -c 'git clone https://github.com/dirkjanm/ROADtools.git /home/${USERNAME}/ROADtools' && /usr/local/bin/log_progress "Cloned ROADtools"
+  - su - ${USERNAME} -c 'git clone https://github.com/aircrack-ng/rtl8812au.git /home/${USERNAME}/rtl8812au' && /usr/local/bin/log_progress "Cloned rtl8812au"
+  - su - ${USERNAME} -c 'git clone https://github.com/SolomonSklash/RubeusToCcache.git /home/${USERNAME}/RubeusToCcache' && /usr/local/bin/log_progress "Cloned RubeusToCcache"
+  - su - ${USERNAME} -c 'wget https://github.com/sensepost/ruler/releases/download/2.4.1/ruler-linux64 -O /home/${USERNAME}/ruler' && /usr/local/bin/log_progress "Downloaded ruler"
+  - su - ${USERNAME} -c 'git clone https://github.com/badsectorlabs/sccm-http-looter.git /home/${USERNAME}/sccm-http-looter' && /usr/local/bin/log_progress "Cloned sccm-http-looter"
+  - su - ${USERNAME} -c 'git clone https://github.com/garrettfoster13/sccmhunter.git /home/${USERNAME}/sccmhunter' && /usr/local/bin/log_progress "Cloned sccmhunter"
+  - su - ${USERNAME} -c 'git clone https://github.com/p0dalirius/sectools.git /home/${USERNAME}/sectools' && /usr/local/bin/log_progress "Cloned sectools"
+  - su - ${USERNAME} -c 'git clone https://github.com/trustedsec/SeeYouCM-Thief.git /home/${USERNAME}/SeeYouCM-Thief' && /usr/local/bin/log_progress "Cloned SeeYouCM-Thief"
+  - su - ${USERNAME} -c 'git clone https://github.com/santoru/shcheck.git /home/${USERNAME}/shcheck' && /usr/local/bin/log_progress "Cloned shcheck"
+  - su - ${USERNAME} -c 'git clone https://github.com/p0dalirius/smbclient-ng.git /home/${USERNAME}/smbclient-ng' && /usr/local/bin/log_progress "Cloned smbclient-ng"
+  - su - ${USERNAME} -c 'git clone https://github.com/jtesta/ssh-audit.git /home/${USERNAME}/ssh-audit' && /usr/local/bin/log_progress "Cloned ssh-audit"
+  - su - ${USERNAME} -c 'git clone https://github.com/drwetter/testssl.sh.git /home/${USERNAME}/testssl.sh' && /usr/local/bin/log_progress "Cloned testssl.sh"
+  - su - ${USERNAME} -c 'git clone https://github.com/zer1t0/ticket_converter.git /home/${USERNAME}/ticket_converter' && /usr/local/bin/log_progress "Cloned ticket_converter"
+  - su - ${USERNAME} -c 'git clone https://github.com/Hackndo/WebclientServiceScanner.git /home/${USERNAME}/WebclientServiceScanner' && /usr/local/bin/log_progress "Cloned WebclientServiceScanner"
+  - su - ${USERNAME} -c 'git clone https://github.com/ZerBea/wifi_laboratory.git /home/${USERNAME}/wifi_laboratory' && /usr/local/bin/log_progress "Cloned wifi_laboratory"
+  - su - ${USERNAME} -c 'mkdir -p /home/${USERNAME}/nessus' && /usr/local/bin/log_progress "Created nessus directory"
+  - su - ${USERNAME} -c 'curl --request GET --url "https://www.tenable.com/downloads/api/v2/pages/nessus/files/Nessus-10.8.2-ubuntu1604_amd64.deb" --output "/home/${USERNAME}/nessus/Nessus-10.8.2-ubuntu1604_amd64.deb"' && /usr/local/bin/log_progress "Downloaded Nessus"
+  - /usr/local/bin/log_progress "Installing pipx packages"
+  - su - ${USERNAME} -c 'pipx install exegol' && /usr/local/bin/log_progress "Installed exegol"
+  - su - ${USERNAME} -c 'pipx ensurepath' && /usr/local/bin/log_progress "Configured pipx path"
+  - su - ${USERNAME} -c 'source ~/.bashrc'
+  - su - ${USERNAME} -c 'echo "alias exegol='\''sudo -E $(which exegol)'\''" >> /home/${USERNAME}/.bash_aliases'
+  - su - ${USERNAME} -c 'source ~/.bashrc'
+  - usermod -aG docker ${USERNAME} && /usr/local/bin/log_progress "Added user to docker group"
+  - /usr/local/bin/log_progress "Installing docker images"
+  - su - ${USERNAME} -c 'yes y | exegol install ad' && /usr/local/bin/log_progress "Installed exegol AD image"
+  - su - ${USERNAME} -c 'python3 -m pipx install impacket' && /usr/local/bin/log_progress "Installed impacket"
+  - su - ${USERNAME} -c 'docker run -it blacklanternsecurity/bbot:stable --help' && /usr/local/bin/log_progress "Pulled BBOT image"
+  - su - ${USERNAME} -c 'docker pull bettercap/bettercap' && /usr/local/bin/log_progress "Pulled bettercap image"
+  - su - ${USERNAME} -c 'docker pull oscarakaelvis/evil-winrm' && /usr/local/bin/log_progress "Pulled evil-winrm image"
+  - su - ${USERNAME} -c 'docker pull ghcr.io/sensepost/gowitness:latest' && /usr/local/bin/log_progress "Pulled gowitness image"
+  - /usr/local/bin/log_progress "Build process complete, preparing final email"
+  - /usr/local/bin/log_progress "Installing Tailscale..."
+  - chown ${USERNAME}:${USERNAME} /home/${USERNAME}/tail.sh
+  - su - ${USERNAME} -c '/home/${USERNAME}/tail.sh' && /usr/local/bin/log_progress "Tailscale installed and configured"
+  - |
+    VM_NAME=$(hostname | tr '[:lower:]' '[:upper:]')
+    VM_ID=$(cat /etc/pve/.vmid)
+    VM_IP=$(hostname -I | awk '{print $1}')
+    PROXMOX_HOSTNAME=$(hostname -s | tr '[:lower:]' '[:upper:]')
+    
+    # Update MOTD to show completion
+    echo "Welcome to ${VM_NAME}!
+
+    Build Status: Complete
+    VM ID: ${VM_ID}
+    IP Address: ${VM_IP}
+    
+    Build log available at: /var/log/vm-build.log" > /etc/motd
+    
+    # Only send email if flag file doesn't exist
+    if [ ! -f /var/lib/cloud/instance/email-sent ]; then
+        email_content="Subject: $PROXMOX_HOSTNAME - $VM_NAME - VMID: $VM_ID - VM Build Complete
+
+        Your VM build is now complete.
+        VM Name: $VM_NAME
+        VM ID: $VM_ID
+        IP Address: $VM_IP
+
+        You can now:
+        1. Log in with username '${USERNAME}' and password '${USER_PASSWORD}'
+        2. Check /var/log/vm-build.log for build details
+        3. Access the VM via SSH: ssh ${USERNAME}@$VM_IP"
+        
+        echo "$email_content" | curl --url '${SMTP_URL}' --ssl-reqd \
+          --mail-from '${SMTP_FROM}' \
+          --mail-rcpt '${SMTP_TO}' \
+          --user '${SMTP_USER}:${SMTP_PASSWORD}' \
+          --upload-file -
+        
+        # Create flag file to indicate email was sent
+        touch /var/lib/cloud/instance/email-sent
+    fi
+  - /usr/local/bin/log_progress "Email alert sent"
+  - /usr/local/bin/log_progress "Build complete, rebooting system"
+  - reboot 

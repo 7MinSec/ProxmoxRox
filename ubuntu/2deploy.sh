@@ -43,7 +43,7 @@ check_and_fix_template() {
 echo "Finding available templates..."
 templates=$(qm list | grep -i template)
 if [ -z "$templates" ]; then
-    echo "No templates found. Please run ububuild.sh first."
+    echo "No templates found. Please run 2build.sh first."
     exit 1
 fi
 
